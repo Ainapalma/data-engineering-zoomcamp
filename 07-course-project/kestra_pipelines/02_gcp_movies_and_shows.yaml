@@ -1,0 +1,110 @@
+id: 02_gcp_movies
+namespace: zoomcamp
+description: |
+  Load streaming service titles data from GitHub to BigQuery via GCS
+
+inputs:
+  - id: streaming_service
+    type: SELECT
+    displayName: Select streaming service
+    values: [netflix, amazon_prime, disney_plus]
+    defaults: netflix
+
+variables:
+  file: "{{inputs.streaming_service}}_titles.csv"
+  gcs_file: "gs://{{kv('GCP_BUCKET_NAME')}}/{{vars.file}}_"
+  table: "{{kv('GCP_DATASET')}}.{{inputs.streaming_service}}_data"
+
+tasks:
+  - id: set_label
+    type: io.kestra.plugin.core.execution.Labels
+    labels:
+      file: "{{render(vars.file)}}"
+      service: "{{inputs.streaming_service}}"
+
+  - id: create_dataset
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE SCHEMA IF NOT EXISTS `{{kv('GCP_PROJECT_ID')}}.{{kv('GCP_DATASET')}}`
+      OPTIONS (
+        location = '{{kv('GCP_LOCATION')}}'
+      );
+
+  - id: extract
+    type: io.kestra.plugin.scripts.shell.Commands
+    outputFiles:
+      - "{{inputs.streaming_service}}_titles.csv"
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - wget -O {{render(vars.file)}} https://raw.githubusercontent.com/Ainapalma/data-engineering-zoomcamp/refs/heads/main/07-course-project/datasets/{{render(vars.file)}}
+
+  - id: upload_to_gcs
+    type: io.kestra.plugin.gcp.gcs.Upload
+    from: "{{outputs.extract.outputFiles[inputs.streaming_service ~ '_titles.csv']}}"
+    to: "{{render(vars.gcs_file)}}"
+
+  - id: create_titles_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE OR REPLACE TABLE `{{kv('GCP_PROJECT_ID')}}.{{render(vars.table)}}` (
+        show_id STRING,
+        type STRING,
+        title STRING,
+        director STRING,
+        `cast` STRING,
+        country STRING,
+        date_added STRING,
+        release_year NUMERIC,
+        rating STRING,
+        duration STRING,
+        listed_in STRING,
+        description STRING
+      );
+
+  - id: create_external_table
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      CREATE OR REPLACE EXTERNAL TABLE `{{kv('GCP_PROJECT_ID')}}.{{render(vars.table)}}_ext` (
+        show_id STRING,
+        type STRING,
+        title STRING,
+        director STRING,
+        `cast` STRING,
+        country STRING,
+        date_added STRING,
+        release_year NUMERIC,
+        rating STRING,
+        duration STRING,
+        listed_in STRING,
+        description STRING
+      )
+      OPTIONS (
+        format = 'CSV',
+        uris = ['{{render(vars.gcs_file)}}'],
+        skip_leading_rows = 1,
+        ignore_unknown_values = TRUE,
+        allow_quoted_newlines = TRUE,
+        allow_jagged_rows = TRUE,
+        quote = '"',
+        field_delimiter = ','
+      );
+
+  - id: load_data
+    type: io.kestra.plugin.gcp.bigquery.Query
+    sql: |
+      INSERT INTO `{{kv('GCP_PROJECT_ID')}}.{{render(vars.table)}}`
+      SELECT * FROM `{{kv('GCP_PROJECT_ID')}}.{{render(vars.table)}}_ext`;
+
+  - id: purge_files
+    type: io.kestra.plugin.core.storage.PurgeCurrentExecutionFiles
+    description: Clean up temporary files
+    disabled: false
+
+pluginDefaults:
+  - type: io.kestra.plugin.gcp
+    values:
+      serviceAccount: "{{kv('GCP_CREDS')}}"
+      projectId: "{{kv('GCP_PROJECT_ID')}}"
+      location: "{{kv('GCP_LOCATION')}}"
+      bucket: "{{kv('GCP_BUCKET_NAME')}}"
