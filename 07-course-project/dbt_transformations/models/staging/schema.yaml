@@ -3,7 +3,7 @@ version: 2
 sources:
   - name: staging
     database: "{{ env_var('DBT_DATABASE', 'XXX') }}"
-    schema: "{{ env_var('DBT_SCHEMA', 'movies_and_shows_data_all') }}"
+    schema: "{{ env_var('DBT_SCHEMA', 'movies_and_shows_all') }}"
     tables:
       - name: netflix_data
 
